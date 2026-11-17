@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.motionsense.app.data.model.SensorDataPoint
 import com.motionsense.app.data.model.SensorType
+import com.motionsense.app.data.repository.RecordingRepository
 import com.motionsense.app.data.repository.SensorRepository
 import com.motionsense.app.domain.model.MonitoringState
 import com.motionsense.app.presentation.dashboard.DashboardUiState
@@ -16,14 +17,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
- * ViewModel managing telemetry state, sensor lifecycle, and rate-limiting updates
- * to ensure optimal Compose UI performance without rendering jank.
+ * ViewModel managing live telemetry data streams, UI rate-limiting decoupling,
+ * and persistent local recording sessions in Room.
  */
 class TelemetryViewModel(
-    private val repository: SensorRepository
+    private val sensorRepository: SensorRepository,
+    private val recordingRepository: RecordingRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -31,8 +36,10 @@ class TelemetryViewModel(
 
     private var accelerometerJob: Job? = null
     private var gyroscopeJob: Job? = null
-    private var timerJob: Job? = null
+    private var monitoringTimerJob: Job? = null
+    private var recordingTimerJob: Job? = null
     private var uiUpdateJob: Job? = null
+    private var dbFlushJob: Job? = null
 
     // Rolling buffers for incoming sensor events before being pushed to UI state
     private val accBuffer = ConcurrentLinkedQueue<SensorDataPoint>()
@@ -46,12 +53,14 @@ class TelemetryViewModel(
     private var sampleCounter = 0L
     private var samplesInCurrentWindow = 0L
     private var lastSampleRateCalcTime = System.currentTimeMillis()
+    private var recordedCount = 0L
 
     private var wasMonitoringBeforePause = false
 
     companion object {
         const val MAX_CHART_HISTORY_POINTS = 50
         const val UI_REFRESH_INTERVAL_MS = 33L // ~30 fps UI update decoupling
+        const val DB_FLUSH_INTERVAL_MS = 500L  // Flush write buffer to SQLite every 500ms
     }
 
     init {
@@ -59,8 +68,8 @@ class TelemetryViewModel(
     }
 
     private fun loadHardwareMetadata() {
-        val accMeta = repository.getSensorMetadata(SensorType.ACCELEROMETER)
-        val gyroMeta = repository.getSensorMetadata(SensorType.GYROSCOPE)
+        val accMeta = sensorRepository.getSensorMetadata(SensorType.ACCELEROMETER)
+        val gyroMeta = sensorRepository.getSensorMetadata(SensorType.GYROSCOPE)
         val deviceStr = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
         val osStr = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
 
@@ -80,7 +89,7 @@ class TelemetryViewModel(
     fun startMonitoring() {
         if (_uiState.value.monitoringState == MonitoringState.MONITORING) return
 
-        stopAllSensorJobs()
+        stopAllMonitoringJobs()
 
         _uiState.update {
             it.copy(monitoringState = MonitoringState.MONITORING)
@@ -88,25 +97,39 @@ class TelemetryViewModel(
 
         // Start Accelerometer Stream
         accelerometerJob = viewModelScope.launch {
-            repository.getSensorStream(SensorType.ACCELEROMETER).collect { point ->
+            sensorRepository.getSensorStream(SensorType.ACCELEROMETER).collect { point ->
                 latestAcc = point
                 accBuffer.add(point)
                 sampleCounter++
                 samplesInCurrentWindow++
+
+                // Forward to database if actively recording
+                val activeSessionId = _uiState.value.activeRecordingSessionId
+                if (_uiState.value.isRecording && activeSessionId != null) {
+                    recordingRepository.enqueueReading(activeSessionId, point)
+                    recordedCount++
+                }
             }
         }
 
         // Start Gyroscope Stream
         gyroscopeJob = viewModelScope.launch {
-            repository.getSensorStream(SensorType.GYROSCOPE).collect { point ->
+            sensorRepository.getSensorStream(SensorType.GYROSCOPE).collect { point ->
                 latestGyro = point
                 gyroBuffer.add(point)
                 sampleCounter++
                 samplesInCurrentWindow++
+
+                // Forward to database if actively recording
+                val activeSessionId = _uiState.value.activeRecordingSessionId
+                if (_uiState.value.isRecording && activeSessionId != null) {
+                    recordingRepository.enqueueReading(activeSessionId, point)
+                    recordedCount++
+                }
             }
         }
 
-        // Start UI decoupling ticker to update StateFlow at controlled 30 Hz
+        // Start UI decoupling ticker to update StateFlow at steady 30 Hz
         uiUpdateJob = viewModelScope.launch {
             while (isActive) {
                 delay(UI_REFRESH_INTERVAL_MS)
@@ -115,7 +138,7 @@ class TelemetryViewModel(
         }
 
         // Start 1-second Session Timer and Sampling Rate calculator
-        timerJob = viewModelScope.launch {
+        monitoringTimerJob = viewModelScope.launch {
             while (isActive) {
                 delay(1000L)
                 val now = System.currentTimeMillis()
@@ -135,10 +158,15 @@ class TelemetryViewModel(
     }
 
     /**
-     * Stops active telemetry data collection and unregisters all hardware listeners.
+     * Stops active telemetry data collection. Automatically finalizes active recording.
      */
     fun stopMonitoring() {
-        stopAllSensorJobs()
+        // If actively recording, finalize recording first
+        if (_uiState.value.isRecording) {
+            stopRecording()
+        }
+
+        stopAllMonitoringJobs()
         _uiState.update {
             it.copy(
                 monitoringState = MonitoringState.IDLE,
@@ -149,13 +177,9 @@ class TelemetryViewModel(
     }
 
     /**
-     * Clears rolling chart histories and resets counters.
+     * Clears rolling chart histories and resets live monitoring counters.
      */
-    fun resetSession() {
-        val wasActive = _uiState.value.isMonitoring
-        if (wasActive) {
-            stopMonitoring()
-        }
+    fun resetLiveTelemetry() {
         accBuffer.clear()
         gyroBuffer.clear()
         latestAcc = null
@@ -174,19 +198,115 @@ class TelemetryViewModel(
                 gyroscopeHistory = emptyList()
             )
         }
+    }
 
-        if (wasActive) {
+    // --- Recording Session Controls (Milestone 3A) ---
+
+    fun openStartRecordingDialog() {
+        _uiState.update { it.copy(showStartRecordingDialog = true) }
+    }
+
+    fun dismissStartRecordingDialog() {
+        _uiState.update { it.copy(showStartRecordingDialog = false) }
+    }
+
+    /**
+     * Creates and begins persistent local recording into Room database.
+     */
+    fun startRecording(customName: String? = null) {
+        dismissStartRecordingDialog()
+        if (_uiState.value.isRecording) return
+
+        // Automatically start monitoring if not already streaming
+        if (!_uiState.value.isMonitoring) {
             startMonitoring()
+        }
+
+        val sessionName = if (!customName.isNullOrBlank()) {
+            customName.trim()
+        } else {
+            val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+            "Session $dateStr"
+        }
+
+        viewModelScope.launch {
+            val sessionId = recordingRepository.startRecording(
+                sessionName = sessionName,
+                deviceModel = _uiState.value.deviceModel
+            )
+
+            recordedCount = 0L
+
+            _uiState.update {
+                it.copy(
+                    isRecording = true,
+                    activeRecordingSessionId = sessionId,
+                    activeRecordingSessionName = sessionName,
+                    recordingDurationSeconds = 0L,
+                    recordedSamplesCount = 0L
+                )
+            }
+
+            // Periodic buffer flush to SQLite
+            dbFlushJob?.cancel()
+            dbFlushJob = launch {
+                while (isActive) {
+                    delay(DB_FLUSH_INTERVAL_MS)
+                    recordingRepository.flushPendingReadings()
+                }
+            }
+
+            // 1-second recording duration timer
+            recordingTimerJob?.cancel()
+            recordingTimerJob = launch {
+                while (isActive) {
+                    delay(1000L)
+                    _uiState.update {
+                        it.copy(
+                            recordingDurationSeconds = it.recordingDurationSeconds + 1,
+                            recordedSamplesCount = recordedCount
+                        )
+                    }
+                }
+            }
         }
     }
 
     /**
-     * Called when the hosting Activity pauses/stops. Unregisters listeners to prevent leaks.
+     * Concludes active recording session, flushes remaining write buffer, and updates Room record.
      */
+    fun stopRecording() {
+        val sessionId = _uiState.value.activeRecordingSessionId ?: return
+
+        recordingTimerJob?.cancel()
+        recordingTimerJob = null
+        dbFlushJob?.cancel()
+        dbFlushJob = null
+
+        viewModelScope.launch {
+            recordingRepository.stopRecording(sessionId)
+            _uiState.update {
+                it.copy(
+                    isRecording = false,
+                    activeRecordingSessionId = null,
+                    activeRecordingSessionName = "",
+                    recordingDurationSeconds = 0L,
+                    recordedSamplesCount = 0L
+                )
+            }
+        }
+    }
+
     fun onLifecyclePause() {
         if (_uiState.value.monitoringState == MonitoringState.MONITORING) {
             wasMonitoringBeforePause = true
-            stopAllSensorJobs()
+            // If recording, flush buffer to avoid losing data
+            if (_uiState.value.isRecording) {
+                viewModelScope.launch {
+                    recordingRepository.flushPendingReadings()
+                }
+            }
+            stopAllMonitoringJobs()
             _uiState.update {
                 it.copy(
                     monitoringState = MonitoringState.PAUSED,
@@ -196,9 +316,6 @@ class TelemetryViewModel(
         }
     }
 
-    /**
-     * Called when the hosting Activity resumes. Restores monitoring if previously active.
-     */
     fun onLifecycleResume() {
         if (wasMonitoringBeforePause) {
             wasMonitoringBeforePause = false
@@ -211,7 +328,6 @@ class TelemetryViewModel(
         while (!accBuffer.isEmpty()) {
             accBuffer.poll()?.let { currentAccHistory.add(it) }
         }
-        // Trim history to bounded window
         while (currentAccHistory.size > MAX_CHART_HISTORY_POINTS) {
             currentAccHistory.removeAt(0)
         }
@@ -220,7 +336,6 @@ class TelemetryViewModel(
         while (!gyroBuffer.isEmpty()) {
             gyroBuffer.poll()?.let { currentGyroHistory.add(it) }
         }
-        // Trim history to bounded window
         while (currentGyroHistory.size > MAX_CHART_HISTORY_POINTS) {
             currentGyroHistory.removeAt(0)
         }
@@ -231,26 +346,36 @@ class TelemetryViewModel(
                 currentAccelerometerReading = latestAcc,
                 currentGyroscopeReading = latestGyro,
                 accelerometerHistory = currentAccHistory,
-                gyroscopeHistory = currentGyroHistory
+                gyroscopeHistory = currentGyroHistory,
+                recordedSamplesCount = if (current.isRecording) recordedCount else current.recordedSamplesCount
             )
         }
     }
 
-    private fun stopAllSensorJobs() {
+    private fun stopAllMonitoringJobs() {
         accelerometerJob?.cancel()
         gyroscopeJob?.cancel()
-        timerJob?.cancel()
+        monitoringTimerJob?.cancel()
         uiUpdateJob?.cancel()
 
         accelerometerJob = null
         gyroscopeJob = null
-        timerJob = null
+        monitoringTimerJob = null
         uiUpdateJob = null
     }
 
     override fun onCleared() {
         super.onCleared()
-        stopAllSensorJobs()
+        if (_uiState.value.isRecording) {
+            _uiState.value.activeRecordingSessionId?.let { id ->
+                kotlinx.coroutines.runBlocking {
+                    recordingRepository.stopRecording(id)
+                }
+            }
+        }
+        stopAllMonitoringJobs()
+        recordingTimerJob?.cancel()
+        dbFlushJob?.cancel()
         accBuffer.clear()
         gyroBuffer.clear()
     }

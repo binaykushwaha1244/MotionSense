@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -54,6 +55,10 @@ kotlin {
     jvmToolchain(17)
 }
 
+ksp {
+    arg("room.generateKotlin", "true")
+}
+
 dependencies {
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
@@ -72,6 +77,11 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
 
+    // Room Database
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
@@ -83,6 +93,7 @@ dependencies {
     // Unit Testing
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.room.testing)
 
     // Instrumented Testing
     androidTestImplementation(libs.androidx.test.core)

@@ -20,11 +20,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.motionsense.app.data.model.SensorType
 import com.motionsense.app.presentation.dashboard.components.MonitoringControls
 import com.motionsense.app.presentation.dashboard.components.SensorCard
+import com.motionsense.app.presentation.dashboard.components.StartRecordingDialog
 import com.motionsense.app.presentation.dashboard.components.TelemetryHeader
 import com.motionsense.app.viewmodel.TelemetryViewModel
 
 /**
- * Main dashboard screen rendering real-time smartphone telemetry.
+ * Main dashboard screen rendering real-time smartphone telemetry and recording controls.
  */
 @Composable
 fun DashboardScreen(
@@ -33,56 +34,62 @@ fun DashboardScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Top Telemetry Header & Branding
-            item {
-                TelemetryHeader(uiState = uiState)
-            }
+    if (uiState.showStartRecordingDialog) {
+        StartRecordingDialog(
+            onDismiss = { viewModel.dismissStartRecordingDialog() },
+            onConfirm = { name -> viewModel.startRecording(name) }
+        )
+    }
 
-            // Controls Bar
-            item {
-                MonitoringControls(
-                    isMonitoring = uiState.isMonitoring,
-                    onStartMonitoring = { viewModel.startMonitoring() },
-                    onStopMonitoring = { viewModel.stopMonitoring() },
-                    onResetSession = { viewModel.resetSession() }
-                )
-            }
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Top Telemetry Header & Branding
+        item {
+            TelemetryHeader(uiState = uiState)
+        }
 
-            // Accelerometer Telemetry Card
-            item {
-                SensorCard(
-                    sensorType = SensorType.ACCELEROMETER,
-                    metadata = uiState.accelerometerMetadata,
-                    reading = uiState.currentAccelerometerReading,
-                    history = uiState.accelerometerHistory,
-                    isMonitoring = uiState.isMonitoring,
-                    icon = Icons.Default.Speed
-                )
-            }
+        // Monitoring & Recording Controls Bar
+        item {
+            MonitoringControls(
+                isMonitoring = uiState.isMonitoring,
+                isRecording = uiState.isRecording,
+                recordingDurationText = uiState.formattedRecordingDuration,
+                recordedSamplesCount = uiState.recordedSamplesCount,
+                onStartMonitoring = { viewModel.startMonitoring() },
+                onStopMonitoring = { viewModel.stopMonitoring() },
+                onResetMonitoring = { viewModel.resetLiveTelemetry() },
+                onStartRecording = { viewModel.openStartRecordingDialog() },
+                onStopRecording = { viewModel.stopRecording() }
+            )
+        }
 
-            // Gyroscope Telemetry Card
-            item {
-                SensorCard(
-                    sensorType = SensorType.GYROSCOPE,
-                    metadata = uiState.gyroscopeMetadata,
-                    reading = uiState.currentGyroscopeReading,
-                    history = uiState.gyroscopeHistory,
-                    isMonitoring = uiState.isMonitoring,
-                    icon = Icons.AutoMirrored.Filled.RotateRight
-                )
-            }
+        // Accelerometer Telemetry Card
+        item {
+            SensorCard(
+                sensorType = SensorType.ACCELEROMETER,
+                metadata = uiState.accelerometerMetadata,
+                reading = uiState.currentAccelerometerReading,
+                history = uiState.accelerometerHistory,
+                isMonitoring = uiState.isMonitoring,
+                icon = Icons.Default.Speed
+            )
+        }
+
+        // Gyroscope Telemetry Card
+        item {
+            SensorCard(
+                sensorType = SensorType.GYROSCOPE,
+                metadata = uiState.gyroscopeMetadata,
+                reading = uiState.currentGyroscopeReading,
+                history = uiState.gyroscopeHistory,
+                isMonitoring = uiState.isMonitoring,
+                icon = Icons.AutoMirrored.Filled.RotateRight
+            )
         }
     }
 }
