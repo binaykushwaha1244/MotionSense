@@ -1,6 +1,6 @@
 # MotionSense Hardware & Automated Testing Report
 
-This document records the testing procedure, physical test bench, baseline verifications, stress tests, and lifecycle validation conducted on physical Android hardware for **Milestone 1** and **Milestone 2**.
+This document records the testing procedure, physical test bench, baseline verifications, stress tests, and lifecycle validation conducted on physical Android hardware for **Milestone 1**, **Milestone 2**, and **Milestone 3A**.
 
 ---
 
@@ -13,6 +13,7 @@ This document records the testing procedure, physical test bench, baseline verif
 | **Processor Architecture** | ARM64-v8a |
 | **Accelerometer Hardware** | Bosch Sensortec `bmi2xy acc` (Driver v1) |
 | **Gyroscope Hardware** | Bosch Sensortec `bmi2xy gyro` (Driver v1) |
+| **Database Engine** | SQLite 3 via Android Room 2.6.1 |
 | **Connectivity** | High-speed USB Debugging (Authorized) |
 | **Testing Date** | November 18, 2026 |
 
@@ -40,8 +41,8 @@ This document records the testing procedure, physical test bench, baseline verif
 | Test Case | Description | Verification Method | Result | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **M2-01** | UI Launch State | App launch prior to monitoring | Displays `IDLE`, Standby badges, `Awaiting telemetry stream...` | **PASSED** |
-| **M2-02** | Start Monitoring Toggle | Tap "Start Monitoring" button | Changes to `Stop Monitoring`, pill turns green `ACTIVE` | **PASSED** |
-| **M2-03** | Stop Monitoring Toggle | Tap "Stop Monitoring" button | Changes to `Start Monitoring`, pill turns gray `IDLE` | **PASSED** |
+| **M2-02** | Start Monitoring Toggle | Tap "Start Stream" button | Changes to `Stop Stream`, pill turns green `ACTIVE` | **PASSED** |
+| **M2-03** | Stop Monitoring Toggle | Tap "Stop Stream" button | Changes to `Start Stream`, pill turns gray `IDLE` | **PASSED** |
 | **M2-04** | Session Reset | Tap "Reset" button | Counters reset to 0, history buffers cleared | **PASSED** |
 | **M2-05** | Real-Time Numeric Updates | High-frequency axis readings | Monospace numbers update smoothly at ~30 Hz without jitter | **PASSED** |
 | **M2-06** | Real-Time Waveform Rendering | Jetpack Compose Canvas time-series | 3 continuous lines ($X$: Red, $Y$: Green, $Z$: Blue) with grid | **PASSED** |
@@ -51,25 +52,20 @@ This document records the testing procedure, physical test bench, baseline verif
 
 ---
 
-## 4. Lifecycle & Reliability Validation
+## 4. Local Data Persistence & CSV Export Checklist (Milestone 3A)
 
-### Backgrounding Test (Home Key Pressed):
-1. **Trigger:** `adb shell input keyevent KEYCODE_HOME` while monitoring was active.
-2. **Observed OS Event (`dumpsys sensorservice`):**
-   ```text
-   02:59:51 - 0x00000004 pid=10222 (bmi2xy gyro, com.motionsense.app)
-   02:59:51 - 0x00000001 pid=10222 (bmi2xy acc, com.motionsense.app)
-   ```
-   Both hardware listeners unregistered immediately at the kernel driver level.
-3. **Power/Battery Impact:** Zero battery drain in background.
-
-### Foregrounding Test (App Resumed):
-1. **Trigger:** User re-opens MotionSense from recent apps.
-2. **Result:** `onLifecycleResume()` called; monitoring resumes without duplicate listeners.
-
-### Repeated Start/Stop Stress Test:
-- Repeatedly toggled Start/Stop Monitoring 10 times consecutively.
-- Verified in `dumpsys sensorservice` that exactly 1 connection exists during active monitoring and 0 connections exist when stopped.
+| Test Case | Description | Verification Method | Result | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **M3-01** | Session Creation | Tap "Record Session to Database" | Dialog opens; initializes active session record | **PASSED** |
+| **M3-02** | Batched Ingestion Pipeline | Ingest readings at 150 Hz | In-memory buffer flushes batches of 100 to SQLite on IO thread | **PASSED** |
+| **M3-03** | Session Finalization | Tap "Stop & Save" | Buffer drained completely; tallies written; status `COMPLETED` | **PASSED** |
+| **M3-04** | Session History Listing | Navigate to Recordings tab | Saved card displays session name, date, duration, sample count | **PASSED** |
+| **M3-05** | Session Details View | Tap saved session card | Renders full analytical metrics and historical waveforms | **PASSED** |
+| **M3-06** | Statistical Computation | Min, Max, Avg, Peak magnitude | Correctly calculates statistics across stored readings | **PASSED** |
+| **M3-07** | Cascade Session Deletion | Tap delete icon on session card | Confirmation dialog shown; session and readings deleted | **PASSED** |
+| **M3-08** | Empty History State | History list with 0 sessions | Displays informative empty state with call-to-action | **PASSED** |
+| **M3-09** | Storage Access Framework (SAF) | Tap "Export Session to CSV" | Launches DocumentsUI file picker with suggested filename | **PASSED** |
+| **M3-10** | CSV Output Validation | Inspect exported CSV file on disk | `6,583` lines (header + 6,582 records); valid comma-separated format | **PASSED** |
 
 ---
 
@@ -85,7 +81,9 @@ Automated unit tests were executed with JUnit:
   - Verified `SensorAccuracy` mapping across all Android framework states.
 - `DashboardUiStateTest`:
   - Verified time duration formatting (`00:42`, `02:05`, `01:01:05`).
-  - Verified state predicates (`isMonitoring`).
+  - Verified state predicates (`isMonitoring`, `isRecording`).
+- `CsvExportTest`:
+  - Validates CSV header structure and data column mapping.
 
 Result: **100% Passed**.
 
@@ -93,5 +91,5 @@ Result: **100% Passed**.
 
 ## 6. Known Limitations & Deferred Scope
 
-- **Milestone 3 (Room DB, CSV Export, BLE, ESP32):** Strictly marked as **PENDING** as specified in the project charter.
+- **Milestone 3B (ESP32, BLE, Cloud Sync):** Strictly marked as **PENDING** as specified in the project charter.
 - **Orientation Lock:** The app adapts to orientation changes, but is optimized for portrait telemetry viewing.

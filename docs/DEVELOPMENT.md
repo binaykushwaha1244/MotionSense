@@ -1,6 +1,6 @@
 # MotionSense Development & Toolchain Guide
 
-This document describes the development environment, SDK setup, build tools, and terminal commands required to compile, test, and deploy **MotionSense**.
+This document describes the development environment, SDK setup, build tools, database debugging, and terminal commands required to compile, test, and deploy **MotionSense**.
 
 ---
 
@@ -16,7 +16,8 @@ This document describes the development environment, SDK setup, build tools, and
 | **Min SDK** | `minSdk = 26` (Android 8.0 Oreo) |
 | **Build System** | Gradle 9.1.0 (`gradlew.bat`) |
 | **Android Gradle Plugin (AGP)** | 9.0.1 |
-| **Kotlin Version** | 2.3.20 (with Compose Compiler plugin) |
+| **Kotlin Version** | 2.3.20 (with Compose Compiler & KSP 2.3.13) |
+| **Local Database Engine** | Android Room 2.6.1 (SQLite) |
 
 ---
 
@@ -69,11 +70,6 @@ The output APK is generated at:
 ```powershell
 adb devices -l
 ```
-Expected output:
-```text
-List of devices attached
-8XG6USAIKNKZXCU4       device product:CPH2717IN model:CPH2717 device:OP613BL1 transport_id:3
-```
 
 ### 2. Install Debug APK
 ```powershell
@@ -90,12 +86,17 @@ adb shell am start -n com.motionsense.app/.MainActivity
 adb logcat -s AndroidRuntime:E MotionSense:* TelemetryViewModel:*
 ```
 
-### 5. Verify Sensor Registrations in Android OS
+### 5. Inspect Room SQLite Database On-Device
 ```powershell
-adb shell dumpsys sensorservice | Select-String -Pattern "com.motionsense.app"
+# Open interactive SQLite shell
+adb shell "run-as com.motionsense.app sqlite3 databases/motionsense.db 'SELECT * FROM sensor_sessions;'"
+
+# Count total persisted readings
+adb shell "run-as com.motionsense.app sqlite3 databases/motionsense.db 'SELECT COUNT(*) FROM sensor_readings;'"
 ```
 
-### 6. Capture Telemetry Screenshot from Device
+### 6. Verify Exported CSV Files
 ```powershell
-adb exec-out screencap -p > docs/screenshots/dashboard_live.png
+adb shell ls -la /sdcard/Download/MotionSense_*.csv
+adb shell head -n 5 /sdcard/Download/MotionSense_*.csv
 ```

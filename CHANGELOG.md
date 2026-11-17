@@ -7,41 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.0] - 2026-11-18
+## [1.1.0] - 2026-11-18
 
 ### Completed Milestones
-- **Milestone 1 — Sensor Integration (100% Complete & Verified)**
-- **Milestone 2 — Real-Time Telemetry Dashboard (100% Complete & Verified)**
+- **Milestone 1 — Sensor Integration (Reviewed, Polished & Verified)**
+- **Milestone 2 — Real-Time Telemetry Dashboard (Redesigned & Polished)**
+- **Milestone 3A — Local Data Storage & Persistence (100% Complete & Verified)**
 
 ### Added
-- **Hardware Sensor Integration:**
-  - `SensorManager` integration via Kotlin Coroutines `callbackFlow`.
-  - Accelerometer integration (`TYPE_ACCELEROMETER`, Bosch BMI2xy) reading $X, Y, Z$ in $\text{m/s}^2$ with vector magnitude.
-  - Gyroscope integration (`TYPE_GYROSCOPE`, Bosch BMI2xy) reading $X, Y, Z$ in $\text{rad/s}$ with angular velocity magnitude.
-  - Hardware accuracy tracking (`SensorAccuracy`) mapping `SensorManager.SENSOR_STATUS_*`.
-  - Hardware metadata interrogation (driver name, vendor, power in mA, max range, resolution, sampling delay range, reporting mode).
-  - Nanosecond hardware timestamps (`event.timestamp`) captured and preserved.
-  - Lifecycle-aware listener registration and deterministic unregistration via `awaitClose`.
-- **Telemetry Dashboard Presentation:**
-  - Top header displaying MotionSense branding, system status pill (`ACTIVE` / `IDLE` / `PAUSED`), and OnePlus device/OS platform badge.
-  - Live session metrics strip: formatted session duration (`mm:ss`), live sample rate ($\text{Hz}$), and total sample counter.
-  - Monitoring action controls: "Start Monitoring" / "Stop Monitoring" button with play/stop icons, and "Reset Session" button.
-  - Accelerometer telemetry card with 3-axis chips ($X$: Red, $Y$: Green, $Z$: Blue), vector magnitude, accuracy badge, and expandable hardware specifications drawer.
-  - Gyroscope telemetry card with 3-axis chips, angular velocity magnitude, accuracy badge, and expandable hardware specifications drawer.
-  - Custom hardware-accelerated time-series waveform charts implemented via Jetpack Compose `Canvas` with bounded rolling buffers (50 points), zero reference line, dynamic scaling, and axis legends.
-  - High-performance decoupled rate-limiter in `TelemetryViewModel` separating raw hardware event frequency (~150 Hz) from UI recomposition (~30 Hz) to eliminate frame drops.
-  - Dark-first engineering aesthetic with Material 3 styling, monospace numeric typography, and high contrast accents.
-- **Testing & Verification:**
-  - Physical testing on OnePlus Nord CE5 (Android 16 API 36).
-  - Automated unit test suite (`SensorDataPointTest`, `DashboardUiStateTest`).
-  - OS-level listener verification via `adb shell dumpsys sensorservice`.
-  - Comprehensive documentation suite: `README.md`, `ARCHITECTURE.md`, `SENSOR_INTEGRATION.md`, `DEVELOPMENT.md`, `TESTING.md`.
-  - High-resolution physical hardware screenshots embedded in documentation.
+- **Room Database Architecture (Milestone 3A):**
+  - Integrated Kotlin Symbol Processing (`KSP 2.3.13`) and Android Room (`2.6.1`).
+  - Implemented `SensorSessionEntity` tracking session metadata, device specs, duration, and sample counts.
+  - Implemented `SensorReadingEntity` with foreign key CASCADE deletion to sessions, and B-Tree indexes on `sessionId`, `timestampNs`, and composite `(sessionId, sensorType)`.
+  - Created `SensorSessionDao` and `SensorReadingDao` with reactive Flow queries and atomic batch operations.
+  - Implemented `MotionSenseDatabase` singleton with destructive migration fallback for development agility.
+- **Batched Persistence Pipeline:**
+  - High-performance in-memory write buffer (`ConcurrentLinkedQueue`) decoupling high-frequency sensor acquisition (~150 Hz) from SQLite disk writes.
+  - Two-tier flush triggers: threshold-based (100 items), periodic ticker (500ms), and guaranteed drain upon session completion.
+- **Recording Controls & Workflow:**
+  - Clear separation between Live Telemetry Streaming and Local Database Recording.
+  - "Record Session to Database" button with custom naming dialog (`StartRecordingDialog`).
+  - Active recording strip with pulsing Red `REC` indicator, live duration timer, and real-time saved sample counter.
+  - "Stop & Save" control ensuring atomic session finalization.
+- **Application Navigation & Architecture:**
+  - Top-level `MotionSenseNavHost` with Material 3 `NavigationBar` switching between "Live Telemetry" and "Recordings".
+- **Session History Screen:**
+  - Chronological list of saved sessions with date/time, duration, sample counts, and status pills.
+  - Swipe/tap actions to view details, export to CSV, or delete.
+  - Material 3 `AlertDialog` for delete confirmation to prevent accidental loss.
+  - Clean empty state with illustrated icon and call-to-action.
+- **Session Details Screen:**
+  - Session overview card with timestamps, device model, and measurement tallies.
+  - Statistical Analysis Cards for Accelerometer and Gyroscope computing Min, Max, Average for $X, Y, Z$, and peak/average vector magnitude.
+  - Historical Waveform Visualizations plotted directly from stored database readings (downsampled dynamically for smooth Canvas rendering).
+  - Prominent "Export Session to CSV" button.
+- **CSV Export via Storage Access Framework (SAF):**
+  - Integrated `ActivityResultContracts.CreateDocument("text/csv")` for zero-permission file saving.
+  - Streams formatted records directly to the destination Uri output stream without memory bloat.
+  - Verified on physical hardware producing 6,583 lines matching 6,582 recorded data points.
+- **Documentation Suite:**
+  - Created `docs/DATABASE_DESIGN.md` detailing Room architecture, entity schemas, relationships, indexing, and batching.
+  - Captured and embedded high-resolution screenshots of the redesigned dashboard, recording state, history list, details view, and SAF file picker.
 
-### Deferred (Pending)
-- **Milestone 3 — Data Persistence & External Hardware (PENDING):**
-  - Room Database integration (Deferred).
-  - CSV telemetry export (Deferred).
-  - ESP32 communication (Deferred).
-  - Bluetooth Low Energy (BLE) peripheral streaming (Deferred).
-  - Backend/Cloud services (Deferred).
+---
+
+## [1.0.0] - 2026-11-18
+
+### Initial Release
+- Milestone 1: SensorManager integration with Bosch BMI2xy accelerometer and gyroscope.
+- Milestone 2: Real-time telemetry dashboard with Compose Canvas waveforms.
+
+---
+
+## [PENDING] - Milestone 3B
+
+The following external hardware features remain strictly deferred:
+- ⏳ ESP32 firmware and serial telemetry
+- ⏳ Bluetooth Low Energy (BLE) peripheral streaming and discovery
+- ⏳ Cloud synchronization and backend endpoints
